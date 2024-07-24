@@ -73,6 +73,22 @@ type userLoginForm struct {
 	Problems map[string]string `form:"-"`
 }
 
+func (f *userLoginForm) Validate() map[string]string {
+	f.Problems = make(map[string]string)
+
+	if !validator.NotBlank(f.Email) {
+		f.Problems["email"] = "Email field cannot be blank"
+	} else if !validator.Matches(f.Email, validator.EmailRX) {
+		f.Problems["email"] = "Provided email has invalid format"
+	}
+
+	if !validator.NotBlank(f.Password) {
+		f.Problems["password"] = "Password field cannot be blank"
+	}
+
+	return f.Problems
+}
+
 // *GET*
 
 func handleHome(
@@ -298,7 +314,45 @@ func userLoginPost(
 	users *models.UsersModel,
 	templates map[string]*template.Template,
 ) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := getTemplate(templates, "login.tmpl.html")
 
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		err := r.ParseForm()
+		if err != nil {
+			clientError(w, http.StatusBadRequest)
+			return
+		}
+
+		email := r.PostForm.Get("email")
+		password := r.PostForm.Get("password")
+		form := userLoginForm{
+			Email:    email,
+			Password: password,
+		}
+		problems := form.Validate()
+		if len(problems) > 0 {
+			data := newTemplateData()
+			data.Form = form
+			if err := render(w, ts, http.StatusUnprocessableEntity, data); err != nil {
+				serverError(w, logger, err, "method", r.Method, "uri", r.URL.RequestURI())
+				return
+			}
+		}
+
+		_, err = users.Authenticate(email, password)
+		if err != nil {
+			if errors.Is(err, models.ErrInvalidCredentials) {
+				data := newTemplateData()
+				form.Problems["email"] = "Invalid email or password"
+				data.Form = form
+				if err := render(w, ts, http.StatusUnprocessableEntity, data); err != nil {
+					serverError(w, logger, err, "method", r.Method, "uri", r.URL.RequestURI())
+					return
+				}
+			} else {
+				serverError(w, logger, err, "method", r.Method, "uri", r.URL.RequestURI())
+			}
+		}
+		http.Redirect(w, r, "/snippet/create", http.StatusSeeOther)
 	})
 }
